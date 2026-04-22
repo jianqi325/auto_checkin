@@ -1,0 +1,15 @@
+﻿.venv/
+__pycache__/
+*.pyc
+
+config/global.env
+config/fishc.env
+config/fishc.cookie.txt
+
+data/logs/
+data/history/
+data/status/
+data/locks/
+
+Desktop.ini
+data/
