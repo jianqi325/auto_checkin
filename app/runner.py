@@ -20,8 +20,10 @@ from app.core.models import (
 )
 from app.core.notify import notify
 from app.core.state import append_history, load_status, save_status
-from app.core.time_util import same_day
+from app.core.time_util import same_day, today_str
 from app.sites.registry import SITE_REGISTRY, create_site
+
+FALLBACK_LAST_CHECK_DATE_KEY = "fallback_last_check_date"
 
 
 def _run_id(now: datetime) -> str:
@@ -88,7 +90,14 @@ def _update_pause_state(status, result: CheckinResult, app_cfg) -> None:
         status.pause_reason = f"SITE_CHANGED repeated {changed_count} times"
 
 
-def _apply_result_to_status(status, result: CheckinResult, run_id: str, trigger: str, now_iso: str) -> None:
+def _apply_result_to_status(
+    status,
+    result: CheckinResult,
+    run_id: str,
+    trigger: str,
+    now_iso: str,
+    fallback_checked_date: str = "",
+) -> None:
     status.last_attempt_at = now_iso
     status.last_result_code = result.result_code
     status.meta["last_run_id"] = run_id
@@ -105,6 +114,8 @@ def _apply_result_to_status(status, result: CheckinResult, run_id: str, trigger:
 
     if result.consecutive_days is not None:
         status.consecutive_days = result.consecutive_days
+    if fallback_checked_date:
+        status.meta[FALLBACK_LAST_CHECK_DATE_KEY] = fallback_checked_date
 
 
 def run_once(
@@ -151,12 +162,18 @@ def run_once(
                 return _result_exit_code(result.result_code)
 
             if fallback_if_missed:
+                today = today_str(app_cfg.timezone)
+                if str(status.meta.get(FALLBACK_LAST_CHECK_DATE_KEY, "")) == today:
+                    log.info("fallback skipped: already checked today")
+                    return 0
                 if not _passed_scheduled_time(datetime.now(), scheduled_time):
                     log.info("fallback skipped: current time earlier than scheduled time %s", scheduled_time)
                     return 0
                 if same_day(status.last_success_at, app_cfg.timezone):
                     log.info("fallback skipped: success already recorded today")
                     return 0
+            else:
+                today = ""
 
             if mode == "run" and (not force) and same_day(status.last_success_at, app_cfg.timezone):
                 result = CheckinResult(site=site, result_code="ALREADY_DONE", success=True, message="local state indicates already successful today")
@@ -171,7 +188,14 @@ def run_once(
             duration = int((ended_at - started_at).total_seconds() * 1000)
             now_iso = ended_at.isoformat(timespec="seconds")
 
-            _apply_result_to_status(status, result, run_id, trigger, now_iso)
+            _apply_result_to_status(
+                status,
+                result,
+                run_id,
+                trigger,
+                now_iso,
+                fallback_checked_date=today if fallback_if_missed else "",
+            )
             _update_pause_state(status, result, app_cfg)
             save_status(status_path, status)
 
